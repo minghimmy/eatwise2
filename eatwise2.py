@@ -8,7 +8,7 @@ from io import BytesIO
 
 # ==================== CONFIGURATION (Backend) ====================
 # Insert your API credentials here
-AZURE_API_KEY = "YOUR_API_KEY_HERE"  # Replace with your actual API key
+AZURE_API_KEY = "a0bccf54e1e14deab0feb9ea8217fd5d"  # Replace with your actual API key
 AZURE_API_VERSION = "2023-05-15"
 AZURE_ENDPOINT = "https://hkust.azure-api.net"
 # =================================================================
@@ -434,4 +434,5 @@ st.markdown("""
     Always consult with a qualified healthcare professional or registered dietitian before making significant dietary changes.</p>
     <p style='font-size: 0.9rem; margin-top: 0.5rem;'>Powered by Azure OpenAI GPT-4o | Built with Streamlit</p>
 </div>
+
 """, unsafe_allow_html=True)
