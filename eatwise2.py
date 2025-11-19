@@ -1,75 +1,48 @@
-import streamlit as st
-import numpy as np
-import pandas as pd
-from openai import AzureOpenAI
+import os
 import time
 import base64
 from io import BytesIO
 
-# ==================== CONFIGURATION (Backend) ====================
-# Insert your API credentials here
-AZURE_API_KEY = "a0bccf54e1e14deab0feb9ea8217fd5d"  # Replace with your actual API key
-AZURE_API_VERSION = "2023-05-15"
-AZURE_ENDPOINT = "https://hkust.azure-api.net"
-# =================================================================
+import streamlit as st
+import numpy as np
+import pandas as pd
+from openai import AzureOpenAI
 
+
+# ==================== CONFIGURATION (Backend) ====================
+
+# All sensitive values are taken from environment variables / Streamlit secrets
+AZURE_API_KEY = os.getenv("AZURE_API_KEY")
+AZURE_API_VERSION = os.getenv("AZURE_API_VERSION", "2024-02-15-preview")
+AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
+AZURE_DEPLOYMENT = os.getenv("AZURE_DEPLOYMENT_NAME", "gpt-4o")  # deployment name in Azure
+
+if not AZURE_API_KEY or not AZURE_ENDPOINT:
+    st.error("Azure OpenAI credentials are not set. Please configure AZURE_API_KEY and AZURE_ENDPOINT in Streamlit secrets.")
+    st.stop()
+
+# =================================================================
 # Page configuration
+
 st.set_page_config(
     page_title="Nutrition Advisor",
     page_icon="🥗",
-    layout="wide"
+    layout="wide",
 )
 
-# Custom CSS for better styling
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #2E7D32;
-        text-align: center;
-        margin-bottom: 1rem;
-    }
-    .sub-header {
-        font-size: 1.2rem;
-        color: #666;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .recommendation-box {
-        background-color: #f0f8f0;
-        padding: 1.5rem;
-        border-radius: 10px;
-        border-left: 5px solid #2E7D32;
-        margin: 1rem 0;
-    }
-    .nutrition-analysis-box {
-        background-color: #e3f2fd;
-        padding: 1.5rem;
-        border-radius: 10px;
-        border-left: 5px solid #1976d2;
-        margin: 1rem 0;
-        color: #000;
-    }
-    .dark-mode .recommendation-box {
-        background-color: #1e3a1e;
-    }
-    .dark-mode .nutrition-analysis-box {
-        background-color: #1e3a3a;
-        color: #fff;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-    }
-    .stTabs [data-baseweb="tab"] {
-        padding: 1rem 2rem;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Optional custom CSS (currently empty – keep for future styling)
+st.markdown(
+    """
+    <style>
+    /* Add custom CSS here if needed */
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # App header
-st.markdown('<p class="main-header">🥗 AI Nutrition Advisor</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Get personalized food recommendations & nutritional analysis</p>', unsafe_allow_html=True)
+st.markdown("## 🥗 AI Nutrition Advisor")
+st.markdown("Get personalized food recommendations & nutritional analysis")
 
 # Sidebar for preferences
 with st.sidebar:
@@ -87,19 +60,18 @@ with st.sidebar:
             "Diabetes Management",
             "High Protein Diet",
             "Vegetarian/Vegan",
-            "Low Carb Diet"
-        ]
+            "Low Carb Diet",
+        ],
     )
 
     st.divider()
 
     # Additional preferences
     st.header("🍽️ Preferences")
-
     meal_type = st.multiselect(
         "Meal Type (optional):",
         ["Breakfast", "Lunch", "Dinner", "Snack", "Pre-workout", "Post-workout"],
-        default=[]
+        default=[],
     )
 
     num_recommendations = st.slider(
@@ -107,80 +79,104 @@ with st.sidebar:
         min_value=1,
         max_value=10,
         value=5,
-        help="How many food suggestions would you like?"
+        help="How many food suggestions would you like?",
     )
 
     dietary_restrictions = st.multiselect(
         "Dietary Restrictions (optional):",
         ["None", "Dairy-free", "Gluten-free", "Nut-free", "Vegetarian", "Vegan", "Halal", "Kosher"],
-        default=["None"]
+        default=["None"],
     )
 
     st.divider()
     st.caption("💡 Tip: Be specific in your questions for better recommendations!")
 
 # Initialize session state
-if 'recommendation_history' not in st.session_state:
+if "recommendation_history" not in st.session_state:
     st.session_state.recommendation_history = []
-if 'analysis_history' not in st.session_state:
+
+if "analysis_history" not in st.session_state:
     st.session_state.analysis_history = []
 
-# Function to create OpenAI client
+
+# ==================== Helper Functions ====================
+
 def create_openai_client():
+    """Create and return an AzureOpenAI client."""
     try:
         client = AzureOpenAI(
             api_key=AZURE_API_KEY,
             api_version=AZURE_API_VERSION,
-            azure_endpoint=AZURE_ENDPOINT
+            azure_endpoint=AZURE_ENDPOINT,
         )
         return client
     except Exception as e:
         st.error(f"Error creating OpenAI client: {str(e)}")
         return None
 
-# Function to encode image to base64
-def encode_image(image_bytes):
-    return base64.b64encode(image_bytes).decode('utf-8')
 
-# Function to generate nutrition recommendations
-def get_nutrition_recommendations(client, query, health_goal, num_recommendations, meal_type, dietary_restrictions):
-    prompt = f"""You are a professional nutrition advisor. Based on the following information, provide {num_recommendations} specific food recommendations.
+def encode_image(image_bytes: bytes) -> str:
+    """Encode raw image bytes as base64 string."""
+    return base64.b64encode(image_bytes).decode("utf-8")
+
+
+def get_nutrition_recommendations(
+    client,
+    query: str,
+    health_goal: str,
+    num_recommendations: int,
+    meal_type: list,
+    dietary_restrictions: list,
+) -> str | None:
+    """Generate nutrition recommendations from text query and user settings."""
+    prompt = f"""
+You are a professional nutrition advisor. Based on the following information, provide {num_recommendations} specific food recommendations.
 
 User's Question: {query}
-
 Health Goal: {health_goal}
 Meal Type: {', '.join(meal_type) if meal_type else 'Any meal'}
 Dietary Restrictions: {', '.join(dietary_restrictions)}
 
-Please provide exactly {num_recommendations} food recommendations. For each recommendation, include:
+Please provide exactly {num_recommendations} food recommendations.
+For each recommendation, include:
 1. Food/Meal name
 2. Brief description (1-2 sentences)
 3. Key nutritional benefits
 4. Approximate calories (if relevant)
 5. Why it fits the user's goal
 
-Format your response in a clear, organized manner with numbered items."""
+Format your response in a clear, organized manner with numbered items.
+""".strip()
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=AZURE_DEPLOYMENT,  # deployment name, not raw model name
             messages=[
-                {"role": "system", "content": "You are a knowledgeable nutrition advisor who provides evidence-based, practical food recommendations tailored to individual health goals and dietary needs."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a knowledgeable nutrition advisor who provides "
+                        "evidence-based, practical food recommendations tailored "
+                        "to individual health goals and dietary needs."
+                    ),
+                },
+                {"role": "user", "content": prompt},
             ],
             temperature=0.7,
-            max_tokens=1500
+            max_tokens=1500,
         )
         return response.choices[0].message.content
     except Exception as e:
         st.error(f"Error getting recommendations: {str(e)}")
         return None
 
-# Function to analyze food from image
-def analyze_food_from_image(client, image_bytes, additional_query=""):
+
+def analyze_food_from_image(client, image_bytes: bytes, additional_query: str = "") -> str | None:
+    """Analyze food from an uploaded image."""
     base64_image = encode_image(image_bytes)
 
-    prompt = f"""Analyze this food image and provide a detailed nutritional breakdown. Include:
+    prompt = f"""
+Analyze this food image and provide a detailed nutritional breakdown. Include:
 
 1. **Food Identification**: What food items do you see?
 2. **Estimated Portion Size**: Approximate serving size
@@ -193,39 +189,39 @@ def analyze_food_from_image(client, image_bytes, additional_query=""):
 
 {f'Additional Information: {additional_query}' if additional_query else ''}
 
-Provide your analysis in a clear, structured format."""
+Provide your analysis in a clear, structured format.
+""".strip()
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=AZURE_DEPLOYMENT,
             messages=[
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": prompt
-                        },
+                        {"type": "text", "text": prompt},
                         {
                             "type": "image_url",
                             "image_url": {
                                 "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
+                            },
+                        },
+                    ],
                 }
             ],
             temperature=0.7,
-            max_tokens=1500
+            max_tokens=1500,
         )
         return response.choices[0].message.content
     except Exception as e:
         st.error(f"Error analyzing image: {str(e)}")
         return None
 
-# Function to analyze food from text description
-def analyze_food_from_text(client, food_description):
-    prompt = f"""Analyze the following food/meal description and provide a detailed nutritional breakdown:
+
+def analyze_food_from_text(client, food_description: str) -> str | None:
+    """Analyze food from a textual description."""
+    prompt = f"""
+Analyze the following food/meal description and provide a detailed nutritional breakdown:
 
 Food Description: {food_description}
 
@@ -239,45 +235,64 @@ Please provide:
 4. **Recommendations**: How could this meal be improved nutritionally?
 5. **Suitable For**: What health goals does this meal support?
 
-Provide your analysis in a clear, structured format."""
+Provide your analysis in a clear, structured format.
+""".strip()
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=AZURE_DEPLOYMENT,
             messages=[
-                {"role": "system", "content": "You are a nutrition expert who can analyze food descriptions and provide detailed nutritional information and health recommendations."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a nutrition expert who can analyze food descriptions "
+                        "and provide detailed nutritional information and health recommendations."
+                    ),
+                },
+                {"role": "user", "content": prompt},
             ],
             temperature=0.7,
-            max_tokens=1500
+            max_tokens=1500,
         )
         return response.choices[0].message.content
     except Exception as e:
         st.error(f"Error analyzing food: {str(e)}")
         return None
 
-# Main tabs
+
+# ==================== Main UI Layout ====================
+
 tab1, tab2 = st.tabs(["🍴 Get Food Recommendations", "🔍 Analyze Nutritional Content"])
 
-# ===================== TAB 1: Food Recommendations =====================
+# -------------------- TAB 1: Food Recommendations --------------------
 with tab1:
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.header("💬 Ask for Food Recommendations")
-
         user_query = st.text_area(
             "What kind of food recommendations are you looking for?",
-            placeholder="E.g., 'What should I eat for breakfast to boost my energy?' or 'Suggest protein-rich snacks for muscle building'",
+            placeholder=(
+                "E.g., 'What should I eat for breakfast to boost my energy?' "
+                "or 'Suggest protein-rich snacks for muscle building'"
+            ),
             height=100,
-            key="recommendation_query"
+            key="recommendation_query",
         )
 
         col_btn1, col_btn2 = st.columns([1, 5])
         with col_btn1:
-            submit_button = st.button("🔍 Get Recommendations", type="primary", use_container_width=True)
+            submit_button = st.button(
+                "🔍 Get Recommendations",
+                type="primary",
+                use_container_width=True,
+            )
         with col_btn2:
-            clear_rec_button = st.button("🗑️ Clear History", use_container_width=True, key="clear_rec")
+            clear_rec_button = st.button(
+                "🗑️ Clear History",
+                use_container_width=True,
+                key="clear_rec",
+            )
 
         if clear_rec_button:
             st.session_state.recommendation_history = []
@@ -285,15 +300,14 @@ with tab1:
 
     with col2:
         st.header("📋 Current Settings")
-        st.info(f"""
-        **Goal:** {health_goal}
-
-        **Meal Types:** {', '.join(meal_type) if meal_type else 'Any'}
-
-        **Recommendations:** {num_recommendations}
-
-        **Restrictions:** {', '.join(dietary_restrictions)}
-        """)
+        st.info(
+            f"""
+**Goal:** {health_goal}  
+**Meal Types:** {', '.join(meal_type) if meal_type else 'Any'}  
+**Recommendations:** {num_recommendations}  
+**Restrictions:** {', '.join(dietary_restrictions)}
+"""
+        )
 
     # Handle recommendation submission
     if submit_button:
@@ -309,130 +323,182 @@ with tab1:
                         health_goal,
                         num_recommendations,
                         meal_type,
-                        dietary_restrictions
+                        dietary_restrictions,
                     )
 
-                    if recommendations:
-                        st.session_state.recommendation_history.append({
-                            'query': user_query,
-                            'goal': health_goal,
-                            'response': recommendations,
-                            'timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
-                        })
-                        st.success("✅ Recommendations generated successfully!")
+                if recommendations:
+                    st.session_state.recommendation_history.append(
+                        {
+                            "query": user_query,
+                            "goal": health_goal,
+                            "response": recommendations,
+                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        }
+                    )
+                    st.success("✅ Recommendations generated successfully!")
 
     # Display recommendation history
     if st.session_state.recommendation_history:
         st.header("📜 Recommendation History")
         for idx, chat in enumerate(reversed(st.session_state.recommendation_history)):
-            with st.expander(f"🕒 {chat['timestamp']} - {chat['goal']}", expanded=(idx==0)):
+            with st.expander(
+                f"🕒 {chat['timestamp']} - {chat['goal']}",
+                expanded=(idx == 0),
+            ):
                 st.markdown(f"**Your Question:** {chat['query']}")
                 st.divider()
-                st.markdown(f"**AI Recommendations:**")
-                st.markdown(f'<div class="recommendation-box">{chat["response"]}</div>', unsafe_allow_html=True)
+                st.markdown("**AI Recommendations:**")
+                st.markdown(chat["response"])
 
-# ===================== TAB 2: Nutritional Analysis =====================
+
+# -------------------- TAB 2: Nutritional Analysis --------------------
 with tab2:
     st.header("🔍 Analyze Nutritional Content")
 
-    analysis_method = st.radio(
-        "Choose analysis method:",
-        ["📸 Upload Food Photo", "📝 Describe Food in Text"],
-        horizontal=True
+    analysis_mode = st.radio(
+        "Choose input method:",
+        ["Describe food in text", "Upload food image"],
+        horizontal=True,
     )
 
-    if analysis_method == "📸 Upload Food Photo":
-        st.subheader("Upload a photo of your food")
+    client = None
 
-        uploaded_file = st.file_uploader(
-            "Choose an image...",
-            type=["jpg", "jpeg", "png"],
-            help="Upload a clear photo of your food for nutritional analysis"
-        )
-
-        additional_context = st.text_input(
-            "Additional Information (optional):",
-            placeholder="E.g., 'grilled chicken breast, 200g' or 'homemade pasta with tomato sauce'",
-            key="image_context"
-        )
-
-        if uploaded_file is not None:
-            col1, col2 = st.columns([1, 1])
-
-            with col1:
-                st.image(uploaded_file, caption="Uploaded Food Image", use_container_width=True)
-
-            with col2:
-                if st.button("🔬 Analyze Food", type="primary", use_container_width=True, key="analyze_image"):
-                    client = create_openai_client()
-                    if client:
-                        with st.spinner("🧠 Analyzing nutritional content..."):
-                            image_bytes = uploaded_file.getvalue()
-                            analysis = analyze_food_from_image(client, image_bytes, additional_context)
-
-                            if analysis:
-                                st.session_state.analysis_history.append({
-                                    'method': 'image',
-                                    'context': additional_context if additional_context else 'No additional context',
-                                    'analysis': analysis,
-                                    'timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
-                                })
-                                st.success("✅ Analysis complete!")
-
-    else:  # Text description
-        st.subheader("Describe the food you want to analyze")
-
+    if analysis_mode == "Describe food in text":
         food_description = st.text_area(
-            "Describe your food/meal:",
-            placeholder="E.g., 'One bowl of brown rice with grilled salmon, steamed broccoli, and avocado' or 'Two slices of whole wheat toast with peanut butter and banana'",
-            height=100,
-            key="food_description"
+            "Describe your meal or food item:",
+            placeholder="E.g., 'One bowl of beef pho with extra noodles and side of spring rolls'",
+            height=120,
+            key="analysis_text",
         )
 
-        if st.button("🔬 Analyze Food", type="primary", key="analyze_text"):
-            if not food_description:
-                st.warning("⚠️ Please describe the food you want to analyze.")
-            else:
-                client = create_openai_client()
-                if client:
-                    with st.spinner("🧠 Analyzing nutritional content..."):
-                        analysis = analyze_food_from_text(client, food_description)
+        col_a1, col_a2 = st.columns([1, 5])
+        with col_a1:
+            analyze_text_btn = st.button(
+                "📊 Analyze Text",
+                type="primary",
+                use_container_width=True,
+            )
+        with col_a2:
+            clear_analysis_btn = st.button(
+                "🧹 Clear History",
+                use_container_width=True,
+                key="clear_analysis",
+            )
 
-                        if analysis:
-                            st.session_state.analysis_history.append({
-                                'method': 'text',
-                                'description': food_description,
-                                'analysis': analysis,
-                                'timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
-                            })
-                            st.success("✅ Analysis complete!")
-
-    # Clear analysis history button
-    if st.session_state.analysis_history:
-        if st.button("🗑️ Clear Analysis History", key="clear_analysis"):
+        if clear_analysis_btn:
             st.session_state.analysis_history = []
             st.rerun()
+
+        if analyze_text_btn:
+            if not food_description.strip():
+                st.warning("⚠️ Please enter a food or meal description.")
+            else:
+                client = client or create_openai_client()
+                if client:
+                    with st.spinner("🔎 Analyzing nutritional content..."):
+                        analysis_result = analyze_food_from_text(
+                            client,
+                            food_description.strip(),
+                        )
+
+                    if analysis_result:
+                        st.session_state.analysis_history.append(
+                            {
+                                "mode": "text",
+                                "input": food_description.strip(),
+                                "result": analysis_result,
+                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            }
+                        )
+                        st.success("✅ Analysis completed!")
+
+    else:  # Upload food image
+        uploaded_image = st.file_uploader(
+            "Upload a food image (JPG/PNG):",
+            type=["jpg", "jpeg", "png"],
+        )
+
+        additional_query = st.text_input(
+            "Optional: Add any extra information (e.g., 'I ate half of this plate', 'This was my lunch')",
+            key="image_extra",
+        )
+
+        col_i1, col_i2 = st.columns([1, 5])
+        with col_i1:
+            analyze_image_btn = st.button(
+                "🖼️ Analyze Image",
+                type="primary",
+                use_container_width=True,
+            )
+        with col_i2:
+            clear_analysis_btn2 = st.button(
+                "🧹 Clear History",
+                use_container_width=True,
+                key="clear_analysis2",
+            )
+
+        if clear_analysis_btn2:
+            st.session_state.analysis_history = []
+            st.rerun()
+
+        if uploaded_image is not None:
+            st.image(uploaded_image, caption="Uploaded food image", use_column_width=True)
+
+        if analyze_image_btn:
+            if uploaded_image is None:
+                st.warning("⚠️ Please upload a food image first.")
+            else:
+                client = client or create_openai_client()
+                if client:
+                    with st.spinner("🔎 Analyzing image and estimating nutrition..."):
+                        image_bytes = uploaded_image.read()
+                        analysis_result = analyze_food_from_image(
+                            client,
+                            image_bytes,
+                            additional_query=additional_query.strip(),
+                        )
+
+                    if analysis_result:
+                        st.session_state.analysis_history.append(
+                            {
+                                "mode": "image",
+                                "input": uploaded_image.name,
+                                "extra": additional_query.strip(),
+                                "result": analysis_result,
+                                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            }
+                        )
+                        st.success("✅ Image analysis completed!")
 
     # Display analysis history
     if st.session_state.analysis_history:
         st.header("📊 Analysis History")
-        for idx, analysis_item in enumerate(reversed(st.session_state.analysis_history)):
-            with st.expander(f"🕒 {analysis_item['timestamp']} - {analysis_item['method'].upper()} Analysis", expanded=(idx==0)):
-                if analysis_item['method'] == 'image':
-                    st.markdown(f"**Additional Information:** {analysis_item['context']}")
+        for idx, item in enumerate(reversed(st.session_state.analysis_history)):
+            title_suffix = "Text" if item["mode"] == "text" else "Image"
+            with st.expander(
+                f"🕒 {item['timestamp']} - {title_suffix} analysis",
+                expanded=(idx == 0),
+            ):
+                if item["mode"] == "text":
+                    st.markdown(f"**Input Description:** {item['input']}")
                 else:
-                    st.markdown(f"**Food Description:** {analysis_item['description']}")
+                    st.markdown(f"**Image File:** {item['input']}")
+                    if item.get("extra"):
+                        st.markdown(f"**Extra Info:** {item['extra']}")
+
                 st.divider()
-                st.markdown(f"**Nutritional Analysis:**")
-                st.markdown(f'<div class="nutrition-analysis-box">{analysis_item["analysis"]}</div>', unsafe_allow_html=True)
+                st.markdown("**AI Nutritional Analysis:**")
+                st.markdown(item["result"])
 
-# Footer
+
+# ==================== Footer / Disclaimer ====================
+
 st.divider()
-st.markdown("""
-<div style='text-align: center; color: #666; padding: 1rem;'>
-    <p>⚠️ <strong>Disclaimer:</strong> This app provides AI-generated nutritional suggestions for informational purposes only.
-    Always consult with a qualified healthcare professional or registered dietitian before making significant dietary changes.</p>
-    <p style='font-size: 0.9rem; margin-top: 0.5rem;'>Powered by Azure OpenAI GPT-4o | Built with Streamlit</p>
-</div>
+st.caption(
+    """
+⚠️ **Disclaimer:** This app provides AI-generated nutritional suggestions for informational purposes only.  
+Always consult with a qualified healthcare professional or registered dietitian before making significant dietary changes.  
 
-""", unsafe_allow_html=True)
+Powered by Azure OpenAI | Built with Streamlit
+"""
+)
